@@ -3,6 +3,7 @@ import * as faceapi from "@vladmandic/face-api";
 import Tesseract from "tesseract.js";
 import UploadIcon from "./assets/upload.svg";
 import Webcam from "react-webcam";
+import { EnhancedFaceDetectionService } from "./services/EnhancedFaceDetectionService";
 
 export default function App() {
   const [proofType, setProofType] = useState("");
@@ -17,8 +18,13 @@ export default function App() {
   const [isComparing, setIsComparing] = useState(false);
   const [detectedFaces, setDetectedFaces] = useState([]);
   const [isDetectingFaces, setIsDetectingFaces] = useState(false);
+  const [comparisonMode, setComparisonMode] = useState(null); // "webcam" or "uploaded"
+  const [uploadedComparisonImage, setUploadedComparisonImage] = useState(null);
+  const [comparisonResult, setComparisonResult] = useState(null);
+  const [isProcessingComparison, setIsProcessingComparison] = useState(false);
   const webcamRef = useRef(null);
   const faceImageRef = useRef(null);
+  const enhancedFaceService = useRef(new EnhancedFaceDetectionService());
 
   useEffect(() => {
     const loadModels = async () => {
@@ -574,6 +580,417 @@ export default function App() {
     }
   };
 
+  // Handle uploaded comparison image
+  const handleComparisonImageUpload = async (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const imgURL = URL.createObjectURL(file);
+      setUploadedComparisonImage(imgURL);
+    }
+  };
+
+  // Compare detected face with captured photo using enhanced service
+  const compareWithWebcam = async () => {
+    if (!faceImg || !capturedImage) {
+      alert("Please ensure both detected face and captured photo are available");
+      return;
+    }
+
+    setIsProcessingComparison(true);
+    setComparisonResult(null);
+
+    try {
+      console.log("Starting enhanced comparison between detected face and captured photo...");
+
+      // Create image elements
+      const detectedFaceImg = new Image();
+      const capturedFaceImg = new Image();
+
+      detectedFaceImg.src = faceImg;
+      capturedFaceImg.src = capturedImage;
+
+      // Wait for both images to load
+      await new Promise((resolve) => {
+        detectedFaceImg.onload = resolve;
+      });
+      await new Promise((resolve) => {
+        capturedFaceImg.onload = resolve;
+      });
+
+      console.log("✅ Images loaded for comparison");
+
+      // Enhanced face detection with fallback mechanisms
+      const detectFaceWithFallback = async (imgElement, imageType) => {
+        console.log(`Detecting face for ${imageType}...`);
+
+        // Attempt 1: Basic SSD detection
+        try {
+          console.log(`Attempt 1: SSD detection for ${imageType}`);
+          const detection = await faceapi
+            .detectSingleFace(
+              imgElement,
+              new faceapi.SsdMobilenetv1Options({ minConfidence: 0.1 })
+            )
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+
+          if (detection && detection.descriptor) {
+            console.log(`✅ SSD detection successful for ${imageType}`);
+            return detection;
+          }
+        } catch (error) {
+          console.warn(`SSD detection failed for ${imageType}:`, error);
+        }
+
+        // Attempt 2: Tiny detector
+        try {
+          console.log(`Attempt 2: Tiny detector for ${imageType}`);
+          const detection = await faceapi
+            .detectSingleFace(
+              imgElement,
+              new faceapi.TinyFaceDetectorOptions({
+                inputSize: 416,
+                scoreThreshold: 0.1,
+              })
+            )
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+
+          if (detection && detection.descriptor) {
+            console.log(`✅ Tiny detection successful for ${imageType}`);
+            return detection;
+          }
+        } catch (error) {
+          console.warn(`Tiny detection failed for ${imageType}:`, error);
+        }
+
+        // Attempt 3: Very low confidence SSD
+        try {
+          console.log(`Attempt 3: Low confidence SSD for ${imageType}`);
+          const detection = await faceapi
+            .detectSingleFace(
+              imgElement,
+              new faceapi.SsdMobilenetv1Options({ minConfidence: 0.05 })
+            )
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+
+          if (detection && detection.descriptor) {
+            console.log(
+              `✅ Low confidence detection successful for ${imageType}`
+            );
+            return detection;
+          }
+        } catch (error) {
+          console.warn(
+            `Low confidence detection failed for ${imageType}:`,
+            error
+          );
+        }
+
+        console.log(`❌ All detection attempts failed for ${imageType}`);
+        return null;
+      };
+
+      // Detect faces for both images
+      const detectedFace = await detectFaceWithFallback(
+        detectedFaceImg,
+        "detected face"
+      );
+      const capturedFace = await detectFaceWithFallback(
+        capturedFaceImg,
+        "captured face"
+      );
+
+      if (!detectedFace || !capturedFace) {
+        alert(
+          "Could not detect faces in one or both images. Please try with clearer face images, ensure faces are visible, and try different angles."
+        );
+        return;
+      }
+
+      console.log("✅ Both faces detected successfully");
+      console.log("Detected face confidence:", detectedFace.detection.score);
+      console.log("Captured face confidence:", capturedFace.detection.score);
+
+      // Validate descriptors exist
+      if (!detectedFace.descriptor || !capturedFace.descriptor) {
+        console.error("Missing descriptors:", {
+          detectedDescriptor: detectedFace.descriptor,
+          capturedDescriptor: capturedFace.descriptor,
+        });
+        alert(
+          "Could not extract face descriptors. Please try with clearer face images showing full face directly."
+        );
+        return;
+      }
+
+      console.log("✅ Descriptors extracted successfully");
+
+      // Calculate similarity using enhanced service
+      let similarityResult;
+
+      try {
+        // Use enhanced comparison
+        similarityResult = enhancedFaceService.current.compareFaces(
+          detectedFace,
+          capturedFace
+        );
+        console.log("✅ Enhanced comparison successful");
+      } catch (enhancedError) {
+        console.warn(
+          "Enhanced comparison failed, using basic method:",
+          enhancedError
+        );
+
+        // Fallback to basic euclidean distance
+        const distance = faceapi.euclideanDistance(
+          detectedFace.descriptor,
+          capturedFace.descriptor
+        );
+        const basicSimilarity = Math.max(0, 100 - distance * 100);
+
+        similarityResult = {
+          overallSimilarity: basicSimilarity,
+          descriptorSimilarity: basicSimilarity,
+          qualityScore: Math.round(
+            ((detectedFace.detection.score || 0.5) +
+              (capturedFace.detection.score || 0.5)) *
+              50
+          ),
+          confidence: Math.min(1, basicSimilarity / 100),
+          match: basicSimilarity > 70,
+          differences: [],
+          detailedMetrics: {},
+          featureSimilarity: {},
+        };
+      }
+
+      console.log("Final similarity result:", similarityResult);
+
+      // Set enhanced comparison result
+      setComparisonResult({
+        similarity: similarityResult.overallSimilarity.toFixed(2),
+        match: similarityResult.match,
+        method: "webcam",
+        timestamp: new Date().toLocaleTimeString(),
+        descriptorSimilarity: similarityResult.descriptorSimilarity.toFixed(2),
+        qualityScore: similarityResult.qualityScore.toFixed(2),
+        confidence: similarityResult.confidence.toFixed(2),
+        differences: similarityResult.differences || [],
+        featureSimilarity: similarityResult.featureSimilarity || {}
+      });
+    } catch (error) {
+      console.error("Error comparing detected face with captured photo:", error);
+      console.error("Error details:", error.stack);
+      alert(`Error comparing faces: ${error.message}. Please try again.`);
+    } finally {
+      setIsProcessingComparison(false);
+    }
+  };
+
+  // Compare detected face with uploaded image using enhanced service
+  const compareWithUploadedImage = async () => {
+    if (!faceImg || !uploadedComparisonImage) {
+      alert(
+        "Please ensure both detected face and uploaded comparison image are available"
+      );
+      return;
+    }
+
+    setIsProcessingComparison(true);
+    setComparisonResult(null);
+
+    try {
+      console.log("Starting enhanced face comparison...");
+
+      // Create image elements for both faces
+      const detectedFaceImg = new Image();
+      const uploadedImg = new Image();
+
+      detectedFaceImg.src = faceImg;
+      uploadedImg.src = uploadedComparisonImage;
+
+      // Wait for both images to load
+      await new Promise((resolve) => {
+        detectedFaceImg.onload = resolve;
+      });
+      await new Promise((resolve) => {
+        uploadedImg.onload = resolve;
+      });
+
+      console.log("✅ Images loaded for comparison");
+
+      // Enhanced face detection with fallback mechanisms
+      const detectFaceWithFallback = async (imgElement, imageType) => {
+        console.log(`Detecting face for ${imageType}...`);
+
+        // Attempt 1: Basic SSD detection
+        try {
+          console.log(`Attempt 1: SSD detection for ${imageType}`);
+          const detection = await faceapi
+            .detectSingleFace(
+              imgElement,
+              new faceapi.SsdMobilenetv1Options({ minConfidence: 0.1 })
+            )
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+
+          if (detection && detection.descriptor) {
+            console.log(`✅ SSD detection successful for ${imageType}`);
+            return detection;
+          }
+        } catch (error) {
+          console.warn(`SSD detection failed for ${imageType}:`, error);
+        }
+
+        // Attempt 2: Tiny detector
+        try {
+          console.log(`Attempt 2: Tiny detector for ${imageType}`);
+          const detection = await faceapi
+            .detectSingleFace(
+              imgElement,
+              new faceapi.TinyFaceDetectorOptions({
+                inputSize: 416,
+                scoreThreshold: 0.1,
+              })
+            )
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+
+          if (detection && detection.descriptor) {
+            console.log(`✅ Tiny detection successful for ${imageType}`);
+            return detection;
+          }
+        } catch (error) {
+          console.warn(`Tiny detection failed for ${imageType}:`, error);
+        }
+
+        // Attempt 3: Very low confidence SSD
+        try {
+          console.log(`Attempt 3: Low confidence SSD for ${imageType}`);
+          const detection = await faceapi
+            .detectSingleFace(
+              imgElement,
+              new faceapi.SsdMobilenetv1Options({ minConfidence: 0.05 })
+            )
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+
+          if (detection && detection.descriptor) {
+            console.log(
+              `✅ Low confidence detection successful for ${imageType}`
+            );
+            return detection;
+          }
+        } catch (error) {
+          console.warn(
+            `Low confidence detection failed for ${imageType}:`,
+            error
+          );
+        }
+
+        console.log(`❌ All detection attempts failed for ${imageType}`);
+        return null;
+      };
+
+      // Detect faces for both images
+      const detectedFace = await detectFaceWithFallback(
+        detectedFaceImg,
+        "detected face"
+      );
+      const uploadedFace = await detectFaceWithFallback(
+        uploadedImg,
+        "uploaded face"
+      );
+
+      if (!detectedFace || !uploadedFace) {
+        alert(
+          "Could not detect faces in one or both images. Please try with clearer face images, ensure faces are visible, and try different angles."
+        );
+        return;
+      }
+
+      console.log("✅ Both faces detected successfully");
+      console.log("Detected face confidence:", detectedFace.detection.score);
+      console.log("Uploaded face confidence:", uploadedFace.detection.score);
+
+      // Validate descriptors exist
+      if (!detectedFace.descriptor || !uploadedFace.descriptor) {
+        console.error("Missing descriptors:", {
+          detectedDescriptor: detectedFace.descriptor,
+          uploadedDescriptor: uploadedFace.descriptor,
+        });
+        alert(
+          "Could not extract face descriptors. Please try with clearer face images showing the full face directly."
+        );
+        return;
+      }
+
+      console.log("✅ Descriptors extracted successfully");
+
+      // Calculate similarity using enhanced service
+      let similarityResult;
+
+      try {
+        // Use enhanced comparison
+        similarityResult = enhancedFaceService.current.compareFaces(
+          detectedFace,
+          uploadedFace
+        );
+        console.log("✅ Enhanced comparison successful");
+      } catch (enhancedError) {
+        console.warn(
+          "Enhanced comparison failed, using basic method:",
+          enhancedError
+        );
+
+        // Fallback to basic euclidean distance
+        const distance = faceapi.euclideanDistance(
+          detectedFace.descriptor,
+          uploadedFace.descriptor
+        );
+        const basicSimilarity = Math.max(0, 100 - distance * 100);
+
+        similarityResult = {
+          overallSimilarity: basicSimilarity,
+          descriptorSimilarity: basicSimilarity,
+          qualityScore: Math.round(
+            ((detectedFace.detection.score || 0.5) +
+              (uploadedFace.detection.score || 0.5)) *
+              50
+          ),
+          confidence: Math.min(1, basicSimilarity / 100),
+          match: basicSimilarity > 70,
+          differences: [],
+          detailedMetrics: {},
+          featureSimilarity: {},
+        };
+      }
+
+      console.log("Final similarity result:", similarityResult);
+
+      // Set the enhanced comparison result
+      setComparisonResult({
+        similarity: similarityResult.overallSimilarity.toFixed(2),
+        match: similarityResult.match,
+        method: "uploaded",
+        timestamp: new Date().toLocaleTimeString(),
+        descriptorSimilarity: similarityResult.descriptorSimilarity.toFixed(2),
+        qualityScore: similarityResult.qualityScore.toFixed(2),
+        confidence: similarityResult.confidence.toFixed(2),
+        differences: similarityResult.differences || [],
+        featureSimilarity: similarityResult.featureSimilarity || {}
+      });
+    } catch (error) {
+      console.error("Error comparing with uploaded image:", error);
+      console.error("Error details:", error.stack);
+      alert(`Error comparing faces: ${error.message}. Please try again.`);
+    } finally {
+      setIsProcessingComparison(false);
+    }
+  };
+
   // Function to detect faces in real-time from webcam
   const detectFacesInRealTime = async () => {
     if (!webcamRef.current || !webcamRef.current.video) return;
@@ -831,7 +1248,47 @@ export default function App() {
                     className="w-28 h-28 sm:w-32 sm:h-32 md:w-36 md:h-36 lg:w-40 lg:h-40 object-cover rounded-full border-2 border-green-500"
                   />
                 </div>
-                {capturedImage && (
+
+                {/* Comparison Options */}
+                <div className="flex flex-col items-center">
+                  <h4 className="text-sm font-medium mb-2 text-gray-600 text-center">
+                    Compare With
+                  </h4>
+                  <div className="flex flex-col gap-2 w-full">
+                    <button
+                      onClick={() => {
+                        setComparisonMode("webcam");
+                        setUploadedComparisonImage(null);
+                        setComparisonResult(null);
+                      }}
+                      disabled={isProcessingComparison}
+                      className={`px-3 py-2 rounded-lg font-medium transition-colors text-xs md:text-sm w-full ${
+                        comparisonMode === "webcam"
+                          ? "bg-blue-600 text-white"
+                          : "bg-blue-500 hover:bg-blue-600 text-white"
+                      }`}
+                    >
+                      Compare with Webcam
+                    </button>
+                    <button
+                      onClick={() => {
+                        setComparisonMode("uploaded");
+                        setComparisonResult(null);
+                      }}
+                      disabled={isProcessingComparison}
+                      className={`px-3 py-2 rounded-lg font-medium transition-colors text-xs md:text-sm w-full ${
+                        comparisonMode === "uploaded"
+                          ? "bg-purple-600 text-white"
+                          : "bg-purple-500 hover:bg-purple-600 text-white"
+                      }`}
+                    >
+                      Compare with Uploaded Image
+                    </button>
+                  </div>
+                </div>
+
+                {/* Captured Photo with Check Similarity Button */}
+                {comparisonMode === "webcam" && capturedImage && (
                   <div className="flex flex-col items-center">
                     <h4 className="text-sm font-medium mb-1 text-gray-600 text-center">
                       Captured Photo
@@ -842,119 +1299,317 @@ export default function App() {
                       className="w-28 h-28 sm:w-32 sm:h-32 md:w-36 md:h-36 lg:w-40 lg:h-40 rounded-full border-2 border-purple-500"
                     />
                     <button
-                      onClick={checkSimilarity}
-                      disabled={isComparing}
-                      className={`mt-2 w-20 md:w-24 px-3 py-2 rounded-lg font-medium transition-colors text-xs md:text-sm ${
-                        isComparing
+                      onClick={compareWithWebcam}
+                      disabled={isProcessingComparison}
+                      className={`mt-2 px-3 py-1 rounded transition-colors text-xs md:text-sm w-full ${
+                        isProcessingComparison
                           ? "bg-gray-400 cursor-not-allowed"
                           : "bg-green-500 hover:bg-green-600 text-white"
                       }`}
                     >
-                      {isComparing ? "Comparing..." : "Check Similarity"}
+                      {isProcessingComparison ? "Comparing..." : "Check Similarity"}
                     </button>
-                    {similarity !== null && (
-                      <div className="mt-2 p-2 rounded-lg border w-20 md:w-24 text-center">
-                        <p className="text-sm md:text-lg font-bold text-green-600">
-                          {similarity}%
-                        </p>
-                      </div>
-                    )}
                   </div>
                 )}
-                <div className="flex flex-col items-center">
-                  <h4 className="text-sm font-medium mb-1 text-gray-600 text-center">
-                    Webcam
-                  </h4>
-                  <div className="relative w-28 h-28 sm:w-32 sm:h-32 md:w-36 md:h-36 lg:w-40 lg:h-40">
-                    <Webcam
-                      ref={webcamRef}
-                      audio={false}
-                      screenshotFormat="image/jpeg"
-                      videoConstraints={{
-                        facingMode: facingMode,
-                        width: { ideal: 1280 }, // Higher resolution for better quality
-                        height: { ideal: 960 }, // Higher resolution for better quality
-                        facingMode: facingMode,
-                      }}
-                      className="w-full h-full object-cover rounded-full border-2 border-blue-500"
-                    />
-                    {/* Green line box around detected faces */}
-                    {detectedFaces.length > 0 && (
-                      <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-full">
-                        {detectedFaces.map((detection, index) => {
-                          const box = detection.detection.box;
-                          const webcamSize =
-                            window.innerWidth < 768
-                              ? 112
-                              : window.innerWidth < 1024
-                              ? 128
-                              : 160; // w-28=112, w-32=128, w-36=144, w-40=160
-                          const scale = webcamSize / 640; // Scale factor based on actual webcam size
 
-                          // Ensure the box stays within webcam boundaries
-                          const left = Math.max(
-                            0,
-                            Math.min(
-                              box.x * scale,
-                              webcamSize - box.width * scale
-                            )
-                          );
-                          const top = Math.max(
-                            0,
-                            Math.min(
-                              box.y * scale,
-                              webcamSize - box.height * scale
-                            )
-                          );
-                          const width = Math.min(
-                            box.width * scale,
-                            webcamSize - left
-                          );
-                          const height = Math.min(
-                            box.height * scale,
-                            webcamSize - top
-                          );
+                {/* Webcam Comparison */}
+                {comparisonMode === "webcam" && (
+                  <div className="flex flex-col items-center">
+                    <h4 className="text-sm font-medium mb-1 text-gray-600 text-center">
+                      Webcam
+                    </h4>
+                    <div className="relative w-28 h-28 sm:w-32 sm:h-32 md:w-36 md:h-36 lg:w-40 lg:h-40">
+                      <Webcam
+                        ref={webcamRef}
+                        audio={false}
+                        screenshotFormat="image/jpeg"
+                        videoConstraints={{
+                          facingMode: facingMode,
+                          width: { ideal: 1280 },
+                          height: { ideal: 960 },
+                        }}
+                        className="w-full h-full object-cover rounded-full border-2 border-blue-500"
+                      />
+                      {/* Green line box around detected faces */}
+                      {detectedFaces.length > 0 && (
+                        <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-full">
+                          {detectedFaces.map((detection, index) => {
+                            const box = detection.detection.box;
+                            const webcamSize =
+                              window.innerWidth < 768
+                                ? 112
+                                : window.innerWidth < 1024
+                                ? 128
+                                : 160;
+                            const scale = webcamSize / 640;
 
-                          return (
-                            <div
-                              key={index}
-                              className="absolute border-2 border-green-500 rounded"
-                              style={{
-                                left: `${left}px`,
-                                top: `${top}px`,
-                                width: `${width}px`,
-                                height: `${height}px`,
-                              }}
-                            />
-                          );
-                        })}
-                      </div>
-                    )}
+                            const left = Math.max(
+                              0,
+                              Math.min(
+                                box.x * scale,
+                                webcamSize - box.width * scale
+                              )
+                            );
+                            const top = Math.max(
+                              0,
+                              Math.min(
+                                box.y * scale,
+                                webcamSize - box.height * scale
+                              )
+                            );
+                            const width = Math.min(
+                              box.width * scale,
+                              webcamSize - left
+                            );
+                            const height = Math.min(
+                              box.height * scale,
+                              webcamSize - top
+                            );
+
+                            return (
+                              <div
+                                key={index}
+                                className="absolute border-2 border-green-500 rounded"
+                                style={{
+                                  left: `${left}px`,
+                                  top: `${top}px`,
+                                  width: `${width}px`,
+                                  height: `${height}px`,
+                                }}
+                              />
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-2 mt-2 w-full">
+                      <button
+                        onClick={() =>
+                          setFacingMode(
+                            facingMode === "user" ? "environment" : "user"
+                          )
+                        }
+                        className="px-3 py-1 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors text-xs md:text-sm w-full"
+                      >
+                        Rotate Camera
+                      </button>
+                      <button
+                        onClick={capturePhoto}
+                        disabled={detectedFaces.length === 0}
+                        className={`px-3 py-1 rounded transition-colors text-xs md:text-sm w-full ${
+                          detectedFaces.length === 0
+                            ? "bg-gray-400 cursor-not-allowed"
+                            : "bg-blue-500 hover:bg-blue-600 text-white"
+                        }`}
+                      >
+                        Click Photo
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex flex-col gap-2 mt-2 w-full">
+                )}
+
+                {/* Uploaded Image Comparison */}
+                {comparisonMode === "uploaded" && (
+                  <div className="flex flex-col items-center">
+                    <h4 className="text-sm font-medium mb-1 text-gray-600 text-center">
+                      Uploaded Image
+                    </h4>
+                    <div className="w-28 h-28 sm:w-32 sm:h-32 md:w-36 md:h-36 lg:w-40 lg:h-40 mb-2">
+                      {uploadedComparisonImage ? (
+                        <img
+                          src={uploadedComparisonImage}
+                          alt="Uploaded Comparison"
+                          className="w-full h-full object-cover rounded-full border-2 border-purple-500"
+                        />
+                      ) : (
+                        <label className="flex flex-col items-center justify-center w-full h-full border-2 border-dashed border-purple-500 rounded-full cursor-pointer hover:bg-purple-50">
+                          <div className="text-purple-500 text-2xl mb-1">+</div>
+                          <span className="text-xs text-purple-600">
+                            Upload
+                          </span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleComparisonImageUpload}
+                            className="hidden"
+                          />
+                        </label>
+                      )}
+                    </div>
                     <button
-                      onClick={() =>
-                        setFacingMode(
-                          facingMode === "user" ? "environment" : "user"
-                        )
+                      onClick={compareWithUploadedImage}
+                      disabled={
+                        !uploadedComparisonImage || isProcessingComparison
                       }
-                      className="px-3 py-1 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors text-xs md:text-sm w-full"
-                    >
-                      Rotate Camera
-                    </button>
-                    <button
-                      onClick={capturePhoto}
-                      disabled={detectedFaces.length === 0}
                       className={`px-3 py-1 rounded transition-colors text-xs md:text-sm w-full ${
-                        detectedFaces.length === 0
+                        !uploadedComparisonImage || isProcessingComparison
                           ? "bg-gray-400 cursor-not-allowed"
-                          : "bg-blue-500 hover:bg-blue-600 text-white"
+                          : "bg-green-500 hover:bg-green-600 text-white"
                       }`}
                     >
-                      Click Photo
+                      {isProcessingComparison ? "Comparing..." : "Compare Now"}
                     </button>
                   </div>
-                </div>
+                )}
+
+                {/* Comparison Result */}
+                {comparisonResult && (
+                  <div className="flex flex-col items-center">
+                    <h4 className="text-sm font-medium mb-1 text-gray-600 text-center">
+                      Comparison Result
+                    </h4>
+                    <div className="p-3 rounded-lg border w-28 h-28 sm:w-32 sm:h-32 md:w-36 md:h-36 lg:w-40 lg:h-40 flex flex-col items-center justify-center">
+                      <p className="text-lg font-bold mb-1">
+                        {comparisonResult.similarity}%
+                      </p>
+                      <p
+                        className={`text-xs font-medium ${
+                          comparisonResult.match
+                            ? "text-green-600"
+                            : "text-red-600"
+                        }`}
+                      >
+                        {comparisonResult.match ? "Match" : "No Match"}
+                      </p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {comparisonResult.method === "webcam"
+                          ? "Webcam"
+                          : "Uploaded"}
+                      </p>
+                      <p className="text-xs text-gray-400">
+                        {comparisonResult.timestamp}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Original webcam and captured photo (hidden when comparison mode is active) */}
+                {!comparisonMode && (
+                  <>
+                    {capturedImage && (
+                      <div className="flex flex-col items-center">
+                        <h4 className="text-sm font-medium mb-1 text-gray-600 text-center">
+                          Captured Photo
+                        </h4>
+                        <img
+                          src={capturedImage}
+                          alt="Captured Photo"
+                          className="w-28 h-28 sm:w-32 sm:h-32 md:w-36 md:h-36 lg:w-40 lg:h-40 rounded-full border-2 border-purple-500"
+                        />
+                        <button
+                          onClick={checkSimilarity}
+                          disabled={isComparing}
+                          className={`mt-2 w-20 md:w-24 px-3 py-2 rounded-lg font-medium transition-colors text-xs md:text-sm ${
+                            isComparing
+                              ? "bg-gray-400 cursor-not-allowed"
+                              : "bg-green-500 hover:bg-green-600 text-white"
+                          }`}
+                        >
+                          {isComparing ? "Comparing..." : "Check Similarity"}
+                        </button>
+                        {similarity !== null && (
+                          <div className="mt-2 p-2 rounded-lg border w-20 md:w-24 text-center">
+                            <p className="text-sm md:text-lg font-bold text-green-600">
+                              {similarity}%
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div className="flex flex-col items-center">
+                      <h4 className="text-sm font-medium mb-1 text-gray-600 text-center">
+                        Webcam
+                      </h4>
+                      <div className="relative w-28 h-28 sm:w-32 sm:h-32 md:w-36 md:h-36 lg:w-40 lg:h-40">
+                        <Webcam
+                          ref={webcamRef}
+                          audio={false}
+                          screenshotFormat="image/jpeg"
+                          videoConstraints={{
+                            facingMode: facingMode,
+                            width: { ideal: 1280 },
+                            height: { ideal: 960 },
+                          }}
+                          className="w-full h-full object-cover rounded-full border-2 border-blue-500"
+                        />
+                        {/* Green line box around detected faces */}
+                        {detectedFaces.length > 0 && (
+                          <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-full">
+                            {detectedFaces.map((detection, index) => {
+                              const box = detection.detection.box;
+                              const webcamSize =
+                                window.innerWidth < 768
+                                  ? 112
+                                  : window.innerWidth < 1024
+                                  ? 128
+                                  : 160;
+                              const scale = webcamSize / 640;
+
+                              const left = Math.max(
+                                0,
+                                Math.min(
+                                  box.x * scale,
+                                  webcamSize - box.width * scale
+                                )
+                              );
+                              const top = Math.max(
+                                0,
+                                Math.min(
+                                  box.y * scale,
+                                  webcamSize - box.height * scale
+                                )
+                              );
+                              const width = Math.min(
+                                box.width * scale,
+                                webcamSize - left
+                              );
+                              const height = Math.min(
+                                box.height * scale,
+                                webcamSize - top
+                              );
+
+                              return (
+                                <div
+                                  key={index}
+                                  className="absolute border-2 border-green-500 rounded"
+                                  style={{
+                                    left: `${left}px`,
+                                    top: `${top}px`,
+                                    width: `${width}px`,
+                                    height: `${height}px`,
+                                  }}
+                                />
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex flex-col gap-2 mt-2 w-full">
+                        <button
+                          onClick={() =>
+                            setFacingMode(
+                              facingMode === "user" ? "environment" : "user"
+                            )
+                          }
+                          className="px-3 py-1 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors text-xs md:text-sm w-full"
+                        >
+                          Rotate Camera
+                        </button>
+                        <button
+                          onClick={capturePhoto}
+                          disabled={detectedFaces.length === 0}
+                          className={`px-3 py-1 rounded transition-colors text-xs md:text-sm w-full ${
+                            detectedFaces.length === 0
+                              ? "bg-gray-400 cursor-not-allowed"
+                              : "bg-blue-500 hover:bg-blue-600 text-white"
+                          }`}
+                        >
+                          Click Photo
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>
