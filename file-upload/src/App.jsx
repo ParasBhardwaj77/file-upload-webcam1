@@ -585,14 +585,51 @@ export default function App() {
     const file = e.target.files[0];
     if (file) {
       const imgURL = URL.createObjectURL(file);
-      setUploadedComparisonImage(imgURL);
+
+      // Detect face in uploaded image
+      try {
+        const img = await faceapi.fetchImage(imgURL);
+        const detection = await faceapi
+          .detectSingleFace(
+            img,
+            new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 })
+          )
+          .withFaceLandmarks();
+
+        if (detection) {
+          const { x, y, width, height } = detection.detection.box;
+          const canvas = document.createElement("canvas");
+          const ctx = canvas.getContext("2d");
+
+          const marginX = width * 0.3;
+          const marginY = height * 0.4;
+
+          const sx = Math.max(0, x - marginX);
+          const sy = Math.max(0, y - marginY);
+          const sWidth = width + marginX * 2;
+          const sHeight = height + marginY * 2;
+
+          canvas.width = sWidth;
+          canvas.height = sHeight;
+          ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, sWidth, sHeight);
+          setUploadedComparisonImage(canvas.toDataURL("image/png"));
+        } else {
+          console.warn("⚠️ No face detected in uploaded image");
+          setUploadedComparisonImage(imgURL); // Fall back to original image if no face detected
+        }
+      } catch (error) {
+        console.error("Error detecting face in uploaded image:", error);
+        setUploadedComparisonImage(imgURL); // Fall back to original image on error
+      }
     }
   };
 
   // Compare detected face with captured photo using enhanced service
   const compareWithWebcam = async () => {
     if (!faceImg || !capturedImage) {
-      alert("Please ensure both detected face and captured photo are available");
+      alert(
+        "Please ensure both detected face and captured photo are available"
+      );
       return;
     }
 
@@ -600,7 +637,9 @@ export default function App() {
     setComparisonResult(null);
 
     try {
-      console.log("Starting enhanced comparison between detected face and captured photo...");
+      console.log(
+        "Starting enhanced comparison between detected face and captured photo..."
+      );
 
       // Create image elements
       const detectedFaceImg = new Image();
@@ -778,10 +817,13 @@ export default function App() {
         qualityScore: similarityResult.qualityScore.toFixed(2),
         confidence: similarityResult.confidence.toFixed(2),
         differences: similarityResult.differences || [],
-        featureSimilarity: similarityResult.featureSimilarity || {}
+        featureSimilarity: similarityResult.featureSimilarity || {},
       });
     } catch (error) {
-      console.error("Error comparing detected face with captured photo:", error);
+      console.error(
+        "Error comparing detected face with captured photo:",
+        error
+      );
       console.error("Error details:", error.stack);
       alert(`Error comparing faces: ${error.message}. Please try again.`);
     } finally {
@@ -980,7 +1022,7 @@ export default function App() {
         qualityScore: similarityResult.qualityScore.toFixed(2),
         confidence: similarityResult.confidence.toFixed(2),
         differences: similarityResult.differences || [],
-        featureSimilarity: similarityResult.featureSimilarity || {}
+        featureSimilarity: similarityResult.featureSimilarity || {},
       });
     } catch (error) {
       console.error("Error comparing with uploaded image:", error);
@@ -1307,7 +1349,9 @@ export default function App() {
                           : "bg-green-500 hover:bg-green-600 text-white"
                       }`}
                     >
-                      {isProcessingComparison ? "Comparing..." : "Check Similarity"}
+                      {isProcessingComparison
+                        ? "Comparing..."
+                        : "Check Similarity"}
                     </button>
                   </div>
                 )}
@@ -1412,20 +1456,22 @@ export default function App() {
                 {comparisonMode === "uploaded" && (
                   <div className="flex flex-col items-center">
                     <h4 className="text-sm font-medium mb-1 text-gray-600 text-center">
-                      Uploaded Image
+                      Uploaded Face
                     </h4>
                     <div className="w-28 h-28 sm:w-32 sm:h-32 md:w-36 md:h-36 lg:w-40 lg:h-40 mb-2">
                       {uploadedComparisonImage ? (
-                        <img
-                          src={uploadedComparisonImage}
-                          alt="Uploaded Comparison"
-                          className="w-full h-full object-cover rounded-full border-2 border-purple-500"
-                        />
+                        <div className="relative w-full h-full">
+                          <img
+                            src={uploadedComparisonImage}
+                            alt="Uploaded Face"
+                            className="w-full h-full object-cover rounded-full border-2 border-purple-500"
+                          />
+                        </div>
                       ) : (
                         <label className="flex flex-col items-center justify-center w-full h-full border-2 border-dashed border-purple-500 rounded-full cursor-pointer hover:bg-purple-50">
                           <div className="text-purple-500 text-2xl mb-1">+</div>
                           <span className="text-xs text-purple-600">
-                            Upload
+                            Upload Face
                           </span>
                           <input
                             type="file"
@@ -1447,7 +1493,9 @@ export default function App() {
                           : "bg-green-500 hover:bg-green-600 text-white"
                       }`}
                     >
-                      {isProcessingComparison ? "Comparing..." : "Compare Now"}
+                      {isProcessingComparison
+                        ? "Comparing..."
+                        : "Compare Faces"}
                     </button>
                   </div>
                 )}
@@ -1458,11 +1506,11 @@ export default function App() {
                     <h4 className="text-sm font-medium mb-1 text-gray-600 text-center">
                       Comparison Result
                     </h4>
-                    <div className="p-3 rounded-lg border w-28 h-28 sm:w-32 sm:h-32 md:w-36 md:h-36 lg:w-40 lg:h-40 flex flex-col items-center justify-center">
-                      <p className="text-lg font-bold mb-1">
-                        {comparisonResult.similarity}%
-                      </p>
-                      <p
+                    {/* <div className="p-3 rounded-lg border w-28 h-28 sm:w-32 sm:h-32 md:w-36 md:h-36 lg:w-40 lg:h-40 flex flex-col items-center justify-center"> */}
+                    <p className="text-lg font-bold mb-1">
+                      {comparisonResult.similarity}%
+                    </p>
+                    {/* <p
                         className={`text-xs font-medium ${
                           comparisonResult.match
                             ? "text-green-600"
@@ -1479,7 +1527,7 @@ export default function App() {
                       <p className="text-xs text-gray-400">
                         {comparisonResult.timestamp}
                       </p>
-                    </div>
+                    </div> */}
                   </div>
                 )}
 
