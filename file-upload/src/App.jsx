@@ -22,6 +22,8 @@ export default function App() {
   const [uploadedComparisonImage, setUploadedComparisonImage] = useState(null);
   const [comparisonResult, setComparisonResult] = useState(null);
   const [isProcessingComparison, setIsProcessingComparison] = useState(false);
+  const [showWebcam, setShowWebcam] = useState(false);
+  const [showUploadedImage, setShowUploadedImage] = useState(false);
   const webcamRef = useRef(null);
   const faceImageRef = useRef(null);
   const enhancedFaceService = useRef(new EnhancedFaceDetectionService());
@@ -39,7 +41,7 @@ export default function App() {
           faceapi.nets.ageGenderNet.loadFromUri(MODEL_URL),
           faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL),
         ]);
-        console.log("✅ All FaceAPI models loaded successfully");
+        console.log(" All FaceAPI models loaded successfully");
       } catch (error) {
         console.error("❌ Error loading models:", error);
         alert("Failed to load face detection models. Please refresh the page.");
@@ -1302,6 +1304,8 @@ export default function App() {
                         setComparisonMode("webcam");
                         setUploadedComparisonImage(null);
                         setComparisonResult(null);
+                        setShowWebcam(true);
+                        setShowUploadedImage(false);
                       }}
                       disabled={isProcessingComparison}
                       className={`px-3 py-2 rounded-lg font-medium transition-colors text-xs md:text-sm w-full ${
@@ -1316,6 +1320,8 @@ export default function App() {
                       onClick={() => {
                         setComparisonMode("uploaded");
                         setComparisonResult(null);
+                        setShowUploadedImage(true);
+                        setShowWebcam(false);
                       }}
                       disabled={isProcessingComparison}
                       className={`px-3 py-2 rounded-lg font-medium transition-colors text-xs md:text-sm w-full ${
@@ -1357,7 +1363,7 @@ export default function App() {
                 )}
 
                 {/* Webcam Comparison */}
-                {comparisonMode === "webcam" && (
+                {showWebcam && (
                   <div className="flex flex-col items-center">
                     <h4 className="text-sm font-medium mb-1 text-gray-600 text-center">
                       Webcam
@@ -1453,7 +1459,7 @@ export default function App() {
                 )}
 
                 {/* Uploaded Image Comparison */}
-                {comparisonMode === "uploaded" && (
+                {showUploadedImage && (
                   <div className="flex flex-col items-center">
                     <h4 className="text-sm font-medium mb-1 text-gray-600 text-center">
                       Uploaded Face
@@ -1531,133 +1537,6 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Original webcam and captured photo (hidden when comparison mode is active) */}
-                {!comparisonMode && (
-                  <>
-                    {capturedImage && (
-                      <div className="flex flex-col items-center">
-                        <h4 className="text-sm font-medium mb-1 text-gray-600 text-center">
-                          Captured Photo
-                        </h4>
-                        <img
-                          src={capturedImage}
-                          alt="Captured Photo"
-                          className="w-28 h-28 sm:w-32 sm:h-32 md:w-36 md:h-36 lg:w-40 lg:h-40 rounded-full border-2 border-purple-500"
-                        />
-                        <button
-                          onClick={checkSimilarity}
-                          disabled={isComparing}
-                          className={`mt-2 w-20 md:w-24 px-3 py-2 rounded-lg font-medium transition-colors text-xs md:text-sm ${
-                            isComparing
-                              ? "bg-gray-400 cursor-not-allowed"
-                              : "bg-green-500 hover:bg-green-600 text-white"
-                          }`}
-                        >
-                          {isComparing ? "Comparing..." : "Check Similarity"}
-                        </button>
-                        {similarity !== null && (
-                          <div className="mt-2 p-2 rounded-lg border w-20 md:w-24 text-center">
-                            <p className="text-sm md:text-lg font-bold text-green-600">
-                              {similarity}%
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    <div className="flex flex-col items-center">
-                      <h4 className="text-sm font-medium mb-1 text-gray-600 text-center">
-                        Webcam
-                      </h4>
-                      <div className="relative w-28 h-28 sm:w-32 sm:h-32 md:w-36 md:h-36 lg:w-40 lg:h-40">
-                        <Webcam
-                          ref={webcamRef}
-                          audio={false}
-                          screenshotFormat="image/jpeg"
-                          videoConstraints={{
-                            facingMode: facingMode,
-                            width: { ideal: 1280 },
-                            height: { ideal: 960 },
-                          }}
-                          className="w-full h-full object-cover rounded-full border-2 border-blue-500"
-                        />
-                        {/* Green line box around detected faces */}
-                        {detectedFaces.length > 0 && (
-                          <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-full">
-                            {detectedFaces.map((detection, index) => {
-                              const box = detection.detection.box;
-                              const webcamSize =
-                                window.innerWidth < 768
-                                  ? 112
-                                  : window.innerWidth < 1024
-                                  ? 128
-                                  : 160;
-                              const scale = webcamSize / 640;
-
-                              const left = Math.max(
-                                0,
-                                Math.min(
-                                  box.x * scale,
-                                  webcamSize - box.width * scale
-                                )
-                              );
-                              const top = Math.max(
-                                0,
-                                Math.min(
-                                  box.y * scale,
-                                  webcamSize - box.height * scale
-                                )
-                              );
-                              const width = Math.min(
-                                box.width * scale,
-                                webcamSize - left
-                              );
-                              const height = Math.min(
-                                box.height * scale,
-                                webcamSize - top
-                              );
-
-                              return (
-                                <div
-                                  key={index}
-                                  className="absolute border-2 border-green-500 rounded"
-                                  style={{
-                                    left: `${left}px`,
-                                    top: `${top}px`,
-                                    width: `${width}px`,
-                                    height: `${height}px`,
-                                  }}
-                                />
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex flex-col gap-2 mt-2 w-full">
-                        <button
-                          onClick={() =>
-                            setFacingMode(
-                              facingMode === "user" ? "environment" : "user"
-                            )
-                          }
-                          className="px-3 py-1 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors text-xs md:text-sm w-full"
-                        >
-                          Rotate Camera
-                        </button>
-                        <button
-                          onClick={capturePhoto}
-                          disabled={detectedFaces.length === 0}
-                          className={`px-3 py-1 rounded transition-colors text-xs md:text-sm w-full ${
-                            detectedFaces.length === 0
-                              ? "bg-gray-400 cursor-not-allowed"
-                              : "bg-blue-500 hover:bg-blue-600 text-white"
-                          }`}
-                        >
-                          Click Photo
-                        </button>
-                      </div>
-                    </div>
-                  </>
-                )}
               </div>
             )}
           </div>
